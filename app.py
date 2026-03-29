@@ -4,10 +4,13 @@ import torch
 from ultralytics import YOLO
 import numpy as np
 
-# Load YOLO
-yolo_model = YOLO("best.pt")
+# -------------------- LOAD MODELS --------------------
 
-# Autoencoder
+# Load YOLO model
+yolo_model = YOLO("best.pt")
+yolo_model.to("cpu")
+
+# Autoencoder model
 class Autoencoder(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -29,39 +32,70 @@ autoencoder = Autoencoder()
 autoencoder.load_state_dict(torch.load("autoencoder.pth", map_location="cpu"))
 autoencoder.eval()
 
-st.title("Weld Defect Detection")
+# -------------------- UI --------------------
 
-uploaded_file = st.file_uploader("Upload Weld Image", type=["jpg","png"])
+st.title("🔍 Weld Defect Detection System")
+
+uploaded_file = st.file_uploader("Upload Weld Image", type=["jpg", "png", "jpeg"])
+
+# -------------------- MAIN LOGIC --------------------
 
 if uploaded_file:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Input Image")
 
-    results = yolo_model.predict(image, imgsz=320)
+    image = Image.open(uploaded_file).convert("RGB")
+    st.image(image, caption="Uploaded Image", use_column_width=True)
+
+    # ---------- YOLO DETECTION ----------
+    results = yolo_model.predict(image, imgsz=256, conf=0.3)
     boxes = results[0].boxes
 
-    if len(boxes) > 0:
+    detected_classes = []
+
+    if boxes is not None and len(boxes) > 0:
         labels = results[0].names
-        detected_classes = [labels[int(cls)] for cls in results[0].boxes.cls]
+        detected_classes = [labels[int(cls)] for cls in boxes.cls]
 
-        if "Defect" in detected_classes or "Bad Weld" in detected_classes:
-            st.write("Result: DEFECTIVE WELD")
-        else:
-            st.write("Result: GOOD WELD")
-
+        # Show bounding box image
         st.image(results[0].plot(), caption="Detection Result")
 
+    # ---------- AUTOENCODER ----------
+    img = image.resize((128,128))
+    img = np.array(img)/255.0
+    img = torch.tensor(img).permute(2,0,1).unsqueeze(0).float()
+
+    recon = autoencoder(img)
+    loss = torch.mean((img - recon)**2).item()
+
+    # ---------- FINAL DECISION LOGIC (FIXED PERFECTLY) ----------
+
+    defect_keywords = ["defect", "bad", "crack", "porosity"]
+
+    is_defect_yolo = any(
+        any(keyword in cls.lower() for keyword in defect_keywords)
+        for cls in detected_classes
+    )
+
+    # Combine YOLO + Autoencoder
+    if is_defect_yolo or loss > 0.006:
+        final_result = "❌ DEFECTIVE WELD"
     else:
-        img = image.resize((128,128))
-        img = np.array(img)/255.0
-        img = torch.tensor(img).permute(2,0,1).unsqueeze(0).float()
+        final_result = "✅ GOOD WELD"
 
-        recon = autoencoder(img)
-        loss = torch.mean((img - recon)**2).item()
+    # ---------- OUTPUT ----------
+    st.subheader("Result:")
+    st.write(final_result)
 
-        if loss > 0.006:
-            st.write("Result: DEFECTIVE (Anomaly)")
-        else:
-            st.write("Result: GOOD WELD")
+    st.subheader("Anomaly Score:")
+    st.write(f"{loss:.6f}")
 
-        st.write(f"Anomaly Score: {loss:.6f}")
+    st.subheader("Explanation:")
+
+    if is_defect_yolo:
+        st.write("Defect detected using YOLO (bounding box shown).")
+    elif loss > 0.006:
+        st.write("No clear defect detected by YOLO, but anomaly score is high.")
+    else:
+        st.write("No defects detected. Weld appears normal.")
+
+    # Debug (optional)
+    st.write("Detected Classes:", detected_classes)
