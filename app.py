@@ -3,6 +3,7 @@ from PIL import Image
 import torch
 from ultralytics import YOLO
 import numpy as np
+
 # Load YOLO
 yolo_model = YOLO("best.pt")
 
